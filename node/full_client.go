@@ -522,15 +522,20 @@ func (c *FullClient) Commit(ctx context.Context, height *int64) (*ctypes.ResultC
 
 // Validators returns paginated list of validators at given height.
 func (c *FullClient) Validators(ctx context.Context, heightPtr *int64, pagePtr, perPagePtr *int) (*ctypes.ResultValidators, error) {
-	height := c.normalizeHeight(heightPtr)
-	genesisValidators := c.node.GetGenesis().Validators
+	state, err := c.node.Store.GetState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load the last saved state: %w", err)
+	}
 
-	if len(genesisValidators) != 1 {
+	height := c.normalizeHeight(heightPtr)
+	stateValidators := state.Validators.Validators
+
+	if len(stateValidators) != 1 {
 		return nil, fmt.Errorf("there should be exactly one validator in genesis")
 	}
 	// Since it's a centralized sequencer
 	// changed behavior to get this from genesis
-	genesisValidator := genesisValidators[0]
+	genesisValidator := stateValidators[0]
 	validator := cmtypes.Validator{
 		Address:          genesisValidator.Address,
 		PubKey:           genesisValidator.PubKey,
@@ -714,6 +719,11 @@ func (c *FullClient) BlockSearch(ctx context.Context, query string, page, perPag
 
 // Status returns detailed information about current status of the node.
 func (c *FullClient) Status(ctx context.Context) (*ctypes.ResultStatus, error) {
+	state, err := c.node.Store.GetState(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load the last saved state: %w", err)
+	}
+
 	var (
 		latestBlockHash cmbytes.HexBytes
 		latestAppHash   cmbytes.HexBytes
@@ -732,12 +742,12 @@ func (c *FullClient) Status(ctx context.Context) (*ctypes.ResultStatus, error) {
 		latestBlockTime = header.Time()
 	}
 
-	initialHeader, _, err := c.node.Store.GetBlockData(ctx, uint64(c.node.GetGenesis().InitialHeight))
+	initialHeader, _, err := c.node.Store.GetBlockData(ctx, state.InitialHeight)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find earliest block: %w", err)
 	}
 
-	genesisValidators := c.node.GetGenesis().Validators
+	genesisValidators := state.Validators.Validators
 
 	if len(genesisValidators) != 1 {
 		return nil, fmt.Errorf("there should be exactly one validator in genesis")
@@ -752,10 +762,6 @@ func (c *FullClient) Status(ctx context.Context) (*ctypes.ResultStatus, error) {
 		ProposerPriority: int64(1),
 	}
 
-	state, err := c.node.Store.GetState(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load the last saved state: %w", err)
-	}
 	defaultProtocolVersion := corep2p.NewProtocolVersion(
 		version.P2PProtocol,
 		state.Version.Consensus.Block,

@@ -5,6 +5,7 @@ package evm
 
 import (
 	"context"
+	"log"
 	"math/big"
 	"testing"
 	"time"
@@ -82,9 +83,11 @@ func TestEngineExecution(t *testing.T) {
 
 		prevStateRoot := rollkitGenesisStateRoot
 		lastHeight, lastHash, lastTxs := checkLatestBlock(tt, ctx)
+		log.Println("lastTxs", lastTxs)
 		lastNonce := uint64(0)
 
-		for blockHeight := initialHeight; blockHeight <= 10; blockHeight++ {
+		for blockHeight := initialHeight + 1; blockHeight <= 10; blockHeight++ {
+			log.Println("blockHeight", blockHeight)
 			nTxs := int(blockHeight) + 10
 			// randomly use no transactions
 			if blockHeight == 4 {
@@ -101,7 +104,8 @@ func TestEngineExecution(t *testing.T) {
 
 			payload, err := executionClient.GetTxs(ctx)
 			require.NoError(tt, err)
-			require.Lenf(tt, payload, nTxs, "expected %d transactions, got %d", nTxs, len(payload))
+			require.Lenf(tt, payload, nTxs+1, "expected %d transactions, got %d", nTxs+1, len(payload))
+			log.Println("nTxs", nTxs)
 
 			allPayloads = append(allPayloads, payload)
 
@@ -113,9 +117,7 @@ func TestEngineExecution(t *testing.T) {
 
 			newStateRoot, maxBytes, err := executionClient.ExecuteTxs(ctx, payload, blockHeight, time.Now(), prevStateRoot)
 			require.NoError(tt, err)
-			if nTxs > 0 {
-				require.NotZero(tt, maxBytes)
-			}
+			require.NotZero(tt, maxBytes)
 
 			err = executionClient.SetFinal(ctx, blockHeight)
 			require.NoError(tt, err)
@@ -124,7 +126,7 @@ func TestEngineExecution(t *testing.T) {
 			lastHeight, lastHash, lastTxs = checkLatestBlock(tt, ctx)
 			require.Equal(tt, blockHeight, lastHeight, "Latest block height should match")
 			require.NotEmpty(tt, lastHash.Hex(), "Latest block hash should not be empty")
-			require.GreaterOrEqual(tt, lastTxs, 0, "Number of transactions should be non-negative")
+			require.Equal(tt, lastTxs, nTxs, "Number of transactions should be equal")
 
 			if nTxs == 0 {
 				require.Equal(tt, prevStateRoot, newStateRoot)
@@ -141,6 +143,7 @@ func TestEngineExecution(t *testing.T) {
 
 	// start new container and try to sync
 	t.Run("Sync chain", func(tt *testing.T) {
+		//tt.Skip("Skip sync chain")
 		jwtSecret := SetupTestRethEngine(t, DOCKER_PATH, JWT_FILENAME)
 
 		executionClient, err := NewEngineExecutionClient(
@@ -162,8 +165,8 @@ func TestEngineExecution(t *testing.T) {
 		prevStateRoot := rollkitGenesisStateRoot
 		lastHeight, lastHash, lastTxs := checkLatestBlock(tt, ctx)
 
-		for blockHeight := initialHeight; blockHeight <= 10; blockHeight++ {
-			payload := allPayloads[blockHeight-1]
+		for blockHeight := initialHeight + 1; blockHeight <= 10; blockHeight++ {
+			payload := allPayloads[blockHeight-initialHeight-1]
 
 			// Check latest block before execution
 			beforeHeight, beforeHash, beforeTxs := checkLatestBlock(tt, ctx)
@@ -172,15 +175,8 @@ func TestEngineExecution(t *testing.T) {
 			require.Equal(tt, lastTxs, beforeTxs, "Number of transactions should match")
 
 			newStateRoot, maxBytes, err := executionClient.ExecuteTxs(ctx, payload, blockHeight, time.Now(), prevStateRoot)
-			require.NoError(t, err)
-			if len(payload) > 0 {
-				require.NotZero(tt, maxBytes)
-			}
-			if len(payload) == 0 {
-				require.Equal(tt, prevStateRoot, newStateRoot)
-			} else {
-				require.NotEqual(tt, prevStateRoot, newStateRoot)
-			}
+			require.NoErrorf(tt, err, "blockHeight: %d, nTxs: %d", blockHeight, len(payload)-1)
+			require.NotZero(tt, maxBytes)
 
 			err = executionClient.SetFinal(ctx, blockHeight)
 			require.NoError(tt, err)
@@ -190,6 +186,12 @@ func TestEngineExecution(t *testing.T) {
 			require.Equal(tt, blockHeight, lastHeight, "Latest block height should match")
 			require.NotEmpty(tt, lastHash.Hex(), "Latest block hash should not be empty")
 			require.GreaterOrEqual(tt, lastTxs, 0, "Number of transactions should be non-negative")
+
+			if len(payload)-1 == 0 {
+				require.Equal(tt, prevStateRoot, newStateRoot)
+			} else {
+				require.NotEqual(tt, prevStateRoot, newStateRoot)
+			}
 
 			prevStateRoot = newStateRoot
 		}

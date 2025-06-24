@@ -373,3 +373,105 @@ func TestHealthLiveEndpoint(t *testing.T) {
 	assert.NoError(err)
 	assert.Equal("OK\n", string(body)) // fmt.Fprintln adds a newline
 }
+
+func TestListMetadataKeysHTTPEndpoint(t *testing.T) {
+	assert := require.New(t)
+
+	// Create mock dependencies
+	mockStore := mocks.NewStore(t)
+	mockP2PManager := &mocks.P2PRPC{}
+
+	// Create the service handler
+	handler, err := NewServiceHandler(mockStore, mockP2PManager)
+	assert.NoError(err)
+	assert.NotNil(handler)
+
+	// Create a new HTTP test server
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Make a GET request to the metadata keys endpoint
+	resp, err := http.Get(server.URL + "/api/v1/metadata/keys")
+	assert.NoError(err)
+	defer resp.Body.Close()
+
+	// Check the status code
+	assert.Equal(http.StatusOK, resp.StatusCode)
+
+	// Check the content type
+	assert.Equal("application/json", resp.Header.Get("Content-Type"))
+
+	// Check that the response body is valid JSON and contains expected keys
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(err)
+	assert.Contains(string(body), `"keys":`)
+	assert.Contains(string(body), `"key":"d"`)
+	assert.Contains(string(body), `"description":"DA included height`)
+}
+
+func TestGetAllMetadataHTTPEndpoint(t *testing.T) {
+	assert := require.New(t)
+
+	// Create mock dependencies
+	mockStore := mocks.NewStore(t)
+	mockP2PManager := &mocks.P2PRPC{}
+
+	// Create the service handler
+	handler, err := NewServiceHandler(mockStore, mockP2PManager)
+	assert.NoError(err)
+	assert.NotNil(handler)
+
+	// Create a new HTTP test server
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Make a GET request to the metadata endpoint
+	resp, err := http.Get(server.URL + "/api/v1/metadata")
+	assert.NoError(err)
+	defer resp.Body.Close()
+
+	// Check the status code
+	assert.Equal(http.StatusOK, resp.StatusCode)
+
+	// Check the content type
+	assert.Equal("application/json", resp.Header.Get("Content-Type"))
+
+	// Check that the response body contains expected information
+	body, err := io.ReadAll(resp.Body)
+	assert.NoError(err)
+	assert.Contains(string(body), `"available_keys":`)
+	assert.Contains(string(body), `"rpc_method":"rollkit.v1.StoreService/GetAllMetadata"`)
+}
+
+func TestHTTPEndpoint_MethodNotAllowed(t *testing.T) {
+	assert := require.New(t)
+
+	// Create mock dependencies
+	mockStore := mocks.NewStore(t)
+	mockP2PManager := &mocks.P2PRPC{}
+
+	// Create the service handler
+	handler, err := NewServiceHandler(mockStore, mockP2PManager)
+	assert.NoError(err)
+	assert.NotNil(handler)
+
+	// Create a new HTTP test server
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// Test POST request to metadata keys endpoint (should be method not allowed)
+	resp, err := http.Post(server.URL+"/api/v1/metadata/keys", "application/json", nil)
+	assert.NoError(err)
+	defer resp.Body.Close()
+
+	// Check the status code
+	assert.Equal(http.StatusMethodNotAllowed, resp.StatusCode)
+
+	// Test POST request to metadata endpoint (should be method not allowed)
+	resp2, err := http.Post(server.URL+"/api/v1/metadata", "application/json", nil)
+	assert.NoError(err)
+	defer resp2.Body.Close()
+
+	// Check the status code
+	assert.Equal(http.StatusMethodNotAllowed, resp2.StatusCode)
+}

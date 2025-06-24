@@ -9,9 +9,6 @@ import (
 	"github.com/rollkit/rollkit/types"
 )
 
-// LastSubmittedHeaderHeightKey is the key used for persisting the last submitted header height in store.
-const LastSubmittedHeaderHeightKey = "last-submitted-header-height"
-
 // PendingHeaders maintains headers that need to be published to DA layer
 //
 // Important assertions:
@@ -35,7 +32,7 @@ func fetchSignedHeader(ctx context.Context, store store.Store, height uint64) (*
 
 // NewPendingHeaders returns a new PendingHeaders struct
 func NewPendingHeaders(store store.Store, logger log.Logger) (*PendingHeaders, error) {
-	base, err := newPendingBase(store, logger, LastSubmittedHeaderHeightKey, fetchSignedHeader)
+	base, err := newPendingBase(store, logger, types.LastSubmittedHeaderHeightKey, fetchSignedHeader)
 	if err != nil {
 		return nil, err
 	}

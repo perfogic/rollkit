@@ -60,6 +60,26 @@ func ExampleClient() {
 		log.Printf("Metadata value: %s", string(metadataValue))
 	}
 
+	// List all available metadata keys
+	metadataKeys, err := client.ListMetadataKeys(ctx)
+	if err != nil {
+		log.Fatalf("Failed to list metadata keys: %v", err)
+	}
+	log.Printf("Available metadata keys:")
+	for _, key := range metadataKeys {
+		log.Printf("  - %s: %s", key.Key, key.Description)
+	}
+
+	// Get all metadata at once
+	allMetadata, err := client.GetAllMetadata(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get all metadata: %v", err)
+	}
+	log.Printf("All node metadata:")
+	for _, entry := range allMetadata {
+		log.Printf("  - %s: %v", entry.Key, entry.Value)
+	}
+
 	// Get a block by height
 	height := uint64(10)
 	block, err := client.GetBlockByHeight(ctx, height)

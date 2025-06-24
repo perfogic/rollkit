@@ -41,6 +41,12 @@ const (
 	// StoreServiceGetMetadataProcedure is the fully-qualified name of the StoreService's GetMetadata
 	// RPC.
 	StoreServiceGetMetadataProcedure = "/rollkit.v1.StoreService/GetMetadata"
+	// StoreServiceListMetadataKeysProcedure is the fully-qualified name of the StoreService's
+	// ListMetadataKeys RPC.
+	StoreServiceListMetadataKeysProcedure = "/rollkit.v1.StoreService/ListMetadataKeys"
+	// StoreServiceGetAllMetadataProcedure is the fully-qualified name of the StoreService's
+	// GetAllMetadata RPC.
+	StoreServiceGetAllMetadataProcedure = "/rollkit.v1.StoreService/GetAllMetadata"
 )
 
 // StoreServiceClient is a client for the rollkit.v1.StoreService service.
@@ -51,6 +57,10 @@ type StoreServiceClient interface {
 	GetState(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetStateResponse], error)
 	// GetMetadata returns metadata for a specific key
 	GetMetadata(context.Context, *connect.Request[v1.GetMetadataRequest]) (*connect.Response[v1.GetMetadataResponse], error)
+	// ListMetadataKeys returns all available metadata keys with descriptions
+	ListMetadataKeys(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.ListMetadataKeysResponse], error)
+	// GetAllMetadata returns all node metadata at once
+	GetAllMetadata(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetAllMetadataResponse], error)
 }
 
 // NewStoreServiceClient constructs a client for the rollkit.v1.StoreService service. By default, it
@@ -82,14 +92,28 @@ func NewStoreServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(storeServiceMethods.ByName("GetMetadata")),
 			connect.WithClientOptions(opts...),
 		),
+		listMetadataKeys: connect.NewClient[emptypb.Empty, v1.ListMetadataKeysResponse](
+			httpClient,
+			baseURL+StoreServiceListMetadataKeysProcedure,
+			connect.WithSchema(storeServiceMethods.ByName("ListMetadataKeys")),
+			connect.WithClientOptions(opts...),
+		),
+		getAllMetadata: connect.NewClient[emptypb.Empty, v1.GetAllMetadataResponse](
+			httpClient,
+			baseURL+StoreServiceGetAllMetadataProcedure,
+			connect.WithSchema(storeServiceMethods.ByName("GetAllMetadata")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // storeServiceClient implements StoreServiceClient.
 type storeServiceClient struct {
-	getBlock    *connect.Client[v1.GetBlockRequest, v1.GetBlockResponse]
-	getState    *connect.Client[emptypb.Empty, v1.GetStateResponse]
-	getMetadata *connect.Client[v1.GetMetadataRequest, v1.GetMetadataResponse]
+	getBlock         *connect.Client[v1.GetBlockRequest, v1.GetBlockResponse]
+	getState         *connect.Client[emptypb.Empty, v1.GetStateResponse]
+	getMetadata      *connect.Client[v1.GetMetadataRequest, v1.GetMetadataResponse]
+	listMetadataKeys *connect.Client[emptypb.Empty, v1.ListMetadataKeysResponse]
+	getAllMetadata   *connect.Client[emptypb.Empty, v1.GetAllMetadataResponse]
 }
 
 // GetBlock calls rollkit.v1.StoreService.GetBlock.
@@ -107,6 +131,16 @@ func (c *storeServiceClient) GetMetadata(ctx context.Context, req *connect.Reque
 	return c.getMetadata.CallUnary(ctx, req)
 }
 
+// ListMetadataKeys calls rollkit.v1.StoreService.ListMetadataKeys.
+func (c *storeServiceClient) ListMetadataKeys(ctx context.Context, req *connect.Request[emptypb.Empty]) (*connect.Response[v1.ListMetadataKeysResponse], error) {
+	return c.listMetadataKeys.CallUnary(ctx, req)
+}
+
+// GetAllMetadata calls rollkit.v1.StoreService.GetAllMetadata.
+func (c *storeServiceClient) GetAllMetadata(ctx context.Context, req *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetAllMetadataResponse], error) {
+	return c.getAllMetadata.CallUnary(ctx, req)
+}
+
 // StoreServiceHandler is an implementation of the rollkit.v1.StoreService service.
 type StoreServiceHandler interface {
 	// GetBlock returns a block by height or hash
@@ -115,6 +149,10 @@ type StoreServiceHandler interface {
 	GetState(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetStateResponse], error)
 	// GetMetadata returns metadata for a specific key
 	GetMetadata(context.Context, *connect.Request[v1.GetMetadataRequest]) (*connect.Response[v1.GetMetadataResponse], error)
+	// ListMetadataKeys returns all available metadata keys with descriptions
+	ListMetadataKeys(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.ListMetadataKeysResponse], error)
+	// GetAllMetadata returns all node metadata at once
+	GetAllMetadata(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetAllMetadataResponse], error)
 }
 
 // NewStoreServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -142,6 +180,18 @@ func NewStoreServiceHandler(svc StoreServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(storeServiceMethods.ByName("GetMetadata")),
 		connect.WithHandlerOptions(opts...),
 	)
+	storeServiceListMetadataKeysHandler := connect.NewUnaryHandler(
+		StoreServiceListMetadataKeysProcedure,
+		svc.ListMetadataKeys,
+		connect.WithSchema(storeServiceMethods.ByName("ListMetadataKeys")),
+		connect.WithHandlerOptions(opts...),
+	)
+	storeServiceGetAllMetadataHandler := connect.NewUnaryHandler(
+		StoreServiceGetAllMetadataProcedure,
+		svc.GetAllMetadata,
+		connect.WithSchema(storeServiceMethods.ByName("GetAllMetadata")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/rollkit.v1.StoreService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case StoreServiceGetBlockProcedure:
@@ -150,6 +200,10 @@ func NewStoreServiceHandler(svc StoreServiceHandler, opts ...connect.HandlerOpti
 			storeServiceGetStateHandler.ServeHTTP(w, r)
 		case StoreServiceGetMetadataProcedure:
 			storeServiceGetMetadataHandler.ServeHTTP(w, r)
+		case StoreServiceListMetadataKeysProcedure:
+			storeServiceListMetadataKeysHandler.ServeHTTP(w, r)
+		case StoreServiceGetAllMetadataProcedure:
+			storeServiceGetAllMetadataHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -169,4 +223,12 @@ func (UnimplementedStoreServiceHandler) GetState(context.Context, *connect.Reque
 
 func (UnimplementedStoreServiceHandler) GetMetadata(context.Context, *connect.Request[v1.GetMetadataRequest]) (*connect.Response[v1.GetMetadataResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("rollkit.v1.StoreService.GetMetadata is not implemented"))
+}
+
+func (UnimplementedStoreServiceHandler) ListMetadataKeys(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.ListMetadataKeysResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("rollkit.v1.StoreService.ListMetadataKeys is not implemented"))
+}
+
+func (UnimplementedStoreServiceHandler) GetAllMetadata(context.Context, *connect.Request[emptypb.Empty]) (*connect.Response[v1.GetAllMetadataResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("rollkit.v1.StoreService.GetAllMetadata is not implemented"))
 }

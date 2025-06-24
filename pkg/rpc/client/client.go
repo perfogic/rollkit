@@ -89,6 +89,30 @@ func (c *Client) GetMetadata(ctx context.Context, key string) ([]byte, error) {
 	return resp.Msg.Value, nil
 }
 
+// ListMetadataKeys returns all available metadata keys with descriptions
+func (c *Client) ListMetadataKeys(ctx context.Context) ([]*pb.MetadataKey, error) {
+	req := connect.NewRequest(&emptypb.Empty{})
+
+	resp, err := c.storeClient.ListMetadataKeys(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Msg.Keys, nil
+}
+
+// GetAllMetadata returns all node metadata at once
+func (c *Client) GetAllMetadata(ctx context.Context) ([]*pb.MetadataEntry, error) {
+	req := connect.NewRequest(&emptypb.Empty{})
+
+	resp, err := c.storeClient.GetAllMetadata(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Msg.Metadata, nil
+}
+
 // GetPeerInfo returns information about the connected peers
 func (c *Client) GetPeerInfo(ctx context.Context) ([]*pb.PeerInfo, error) {
 	req := connect.NewRequest(&emptypb.Empty{})

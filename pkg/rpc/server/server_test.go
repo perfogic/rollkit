@@ -224,6 +224,126 @@ func TestHealthServer_Livez(t *testing.T) {
 	require.Equal(t, pb.HealthStatus_PASS, resp.Msg.Status)
 }
 
+func TestStoreServer_ListMetadataKeys(t *testing.T) {
+	// Create a mock store
+	mockStore := mocks.NewStore(t)
+
+	// Create server with mock store
+	server := NewStoreServer(mockStore)
+
+	// Test ListMetadataKeys
+	req := connect.NewRequest(&emptypb.Empty{})
+	resp, err := server.ListMetadataKeys(context.Background(), req)
+
+	// Assert expectations
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Msg)
+	require.NotEmpty(t, resp.Msg.Keys)
+
+	// Check that we get the expected metadata keys
+	expectedKeys := types.GetKnownMetadataKeys()
+
+	require.Len(t, resp.Msg.Keys, len(expectedKeys))
+
+	for _, metadataKey := range resp.Msg.Keys {
+		expectedDesc, exists := expectedKeys[metadataKey.Key]
+		require.True(t, exists, "Unexpected key: %s", metadataKey.Key)
+		require.Equal(t, expectedDesc, metadataKey.Description)
+	}
+}
+
+func TestStoreServer_GetAllMetadata(t *testing.T) {
+	// Create a mock store
+	mockStore := mocks.NewStore(t)
+
+	// Setup mock expectations for metadata retrieval
+	testData := map[string][]byte{
+		types.DAIncludedHeightKey:             {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 1 as bytes
+		types.LastBatchDataKey:               []byte("batch_data"),
+		types.LastSubmittedHeaderHeightKey:   {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 2 as bytes
+		types.LastSubmittedDataHeightKey:     {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 3 as bytes
+	}
+
+	for key, value := range testData {
+		mockStore.On("GetMetadata", mock.Anything, key).Return(value, nil)
+	}
+
+	// Create server with mock store
+	server := NewStoreServer(mockStore)
+
+	// Test GetAllMetadata
+	req := connect.NewRequest(&emptypb.Empty{})
+	resp, err := server.GetAllMetadata(context.Background(), req)
+
+	// Assert expectations
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Msg)
+	require.Len(t, resp.Msg.Metadata, len(testData))
+
+	// Verify the returned metadata matches expected data
+	returnedData := make(map[string][]byte)
+	for _, entry := range resp.Msg.Metadata {
+		returnedData[entry.Key] = entry.Value
+	}
+
+	for key, expectedValue := range testData {
+		actualValue, exists := returnedData[key]
+		require.True(t, exists, "Missing key: %s", key)
+		require.Equal(t, expectedValue, actualValue, "Value mismatch for key: %s", key)
+	}
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestStoreServer_GetAllMetadata_WithMissingKeys(t *testing.T) {
+	// Create a mock store
+	mockStore := mocks.NewStore(t)
+
+	// Setup mock expectations - some keys exist, some don't
+	testData := map[string][]byte{
+		types.DAIncludedHeightKey: {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 1 as bytes
+		types.LastBatchDataKey:   []byte("batch_data"),
+	}
+
+	// Mock successful calls for existing keys
+	for key, value := range testData {
+		mockStore.On("GetMetadata", mock.Anything, key).Return(value, nil)
+	}
+
+	// Mock failed calls for non-existing keys
+	mockStore.On("GetMetadata", mock.Anything, types.LastSubmittedHeaderHeightKey).Return(nil, fmt.Errorf("key not found"))
+	mockStore.On("GetMetadata", mock.Anything, types.LastSubmittedDataHeightKey).Return(nil, fmt.Errorf("key not found"))
+
+	// Create server with mock store
+	server := NewStoreServer(mockStore)
+
+	// Test GetAllMetadata
+	req := connect.NewRequest(&emptypb.Empty{})
+	resp, err := server.GetAllMetadata(context.Background(), req)
+
+	// Assert expectations - should succeed even with missing keys
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Msg)
+	require.Len(t, resp.Msg.Metadata, len(testData)) // Only existing keys should be returned
+
+	// Verify the returned metadata matches expected data
+	returnedData := make(map[string][]byte)
+	for _, entry := range resp.Msg.Metadata {
+		returnedData[entry.Key] = entry.Value
+	}
+
+	for key, expectedValue := range testData {
+		actualValue, exists := returnedData[key]
+		require.True(t, exists, "Missing key: %s", key)
+		require.Equal(t, expectedValue, actualValue, "Value mismatch for key: %s", key)
+	}
+
+	mockStore.AssertExpectations(t)
+}
+
 func TestHealthLiveEndpoint(t *testing.T) {
 	assert := require.New(t)
 

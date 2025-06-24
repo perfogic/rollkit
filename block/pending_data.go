@@ -9,9 +9,6 @@ import (
 	"github.com/rollkit/rollkit/types"
 )
 
-// LastSubmittedDataHeightKey is the key used for persisting the last submitted data height in store.
-const LastSubmittedDataHeightKey = "last-submitted-data-height"
-
 // PendingData maintains Data that need to be published to DA layer
 //
 // Important assertions:
@@ -35,7 +32,7 @@ func fetchData(ctx context.Context, store store.Store, height uint64) (*types.Da
 
 // NewPendingData returns a new PendingData struct
 func NewPendingData(store store.Store, logger log.Logger) (*PendingData, error) {
-	base, err := newPendingBase(store, logger, LastSubmittedDataHeightKey, fetchData)
+	base, err := newPendingBase(store, logger, types.LastSubmittedDataHeightKey, fetchData)
 	if err != nil {
 		return nil, err
 	}

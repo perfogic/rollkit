@@ -223,3 +223,74 @@ func TestClientGetNetInfo(t *testing.T) {
 	require.Equal(t, "0.0.0.0:26656", resultNetInfo.ListenAddresses[0])
 	mockP2P.AssertExpectations(t)
 }
+
+func TestClientListMetadataKeys(t *testing.T) {
+	// Create mocks
+	mockStore := mocks.NewStore(t)
+	mockP2P := mocks.NewP2PRPC(t)
+
+	// Setup test server and client
+	testServer, client := setupTestServer(t, mockStore, mockP2P)
+	defer testServer.Close()
+
+	// Call ListMetadataKeys
+	keys, err := client.ListMetadataKeys(context.Background())
+
+	// Assert expectations
+	require.NoError(t, err)
+	require.NotEmpty(t, keys)
+	require.Len(t, keys, 4) // We expect 4 metadata keys
+
+	// Check that we get the expected metadata keys
+	expectedKeys := types.GetKnownMetadataKeys()
+
+	for _, metadataKey := range keys {
+		expectedDesc, exists := expectedKeys[metadataKey.Key]
+		require.True(t, exists, "Unexpected key: %s", metadataKey.Key)
+		require.Equal(t, expectedDesc, metadataKey.Description)
+	}
+}
+
+func TestClientGetAllMetadata(t *testing.T) {
+	// Create mocks
+	mockStore := mocks.NewStore(t)
+	mockP2P := mocks.NewP2PRPC(t)
+
+	// Setup mock expectations for metadata retrieval
+	testData := map[string][]byte{
+		types.DAIncludedHeightKey:             {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 1 as bytes
+		types.LastBatchDataKey:               []byte("batch_data"),
+		types.LastSubmittedHeaderHeightKey:   {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 2 as bytes
+		types.LastSubmittedDataHeightKey:     {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // height 3 as bytes
+	}
+
+	for key, value := range testData {
+		mockStore.On("GetMetadata", mock.Anything, key).Return(value, nil)
+	}
+
+	// Setup test server and client
+	testServer, client := setupTestServer(t, mockStore, mockP2P)
+	defer testServer.Close()
+
+	// Call GetAllMetadata
+	metadata, err := client.GetAllMetadata(context.Background())
+
+	// Assert expectations
+	require.NoError(t, err)
+	require.NotEmpty(t, metadata)
+	require.Len(t, metadata, len(testData))
+
+	// Verify the returned metadata matches expected data
+	returnedData := make(map[string][]byte)
+	for _, entry := range metadata {
+		returnedData[entry.Key] = entry.Value
+	}
+
+	for key, expectedValue := range testData {
+		actualValue, exists := returnedData[key]
+		require.True(t, exists, "Missing key: %s", key)
+		require.Equal(t, expectedValue, actualValue, "Value mismatch for key: %s", key)
+	}
+
+	mockStore.AssertExpectations(t)
+}

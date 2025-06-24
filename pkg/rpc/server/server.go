@@ -132,6 +132,56 @@ func (s *StoreServer) GetMetadata(
 	}), nil
 }
 
+// ListMetadataKeys implements the ListMetadataKeys RPC method
+func (s *StoreServer) ListMetadataKeys(
+	ctx context.Context,
+	req *connect.Request[emptypb.Empty],
+) (*connect.Response[pb.ListMetadataKeysResponse], error) {
+	// Get the known metadata keys with descriptions
+	knownKeys := types.GetKnownMetadataKeys()
+	
+	var metadataKeys []*pb.MetadataKey
+	for key, description := range knownKeys {
+		metadataKeys = append(metadataKeys, &pb.MetadataKey{
+			Key:         key,
+			Description: description,
+		})
+	}
+
+	return connect.NewResponse(&pb.ListMetadataKeysResponse{
+		Keys: metadataKeys,
+	}), nil
+}
+
+// GetAllMetadata implements the GetAllMetadata RPC method
+func (s *StoreServer) GetAllMetadata(
+	ctx context.Context,
+	req *connect.Request[emptypb.Empty],
+) (*connect.Response[pb.GetAllMetadataResponse], error) {
+	// Get the known metadata keys
+	knownKeys := types.GetKnownMetadataKeysList()
+
+	var metadataEntries []*pb.MetadataEntry
+
+	// Retrieve all known metadata
+	for _, key := range knownKeys {
+		value, err := s.store.GetMetadata(ctx, key)
+		if err != nil {
+			// Skip keys that don't exist or can't be retrieved
+			continue
+		}
+
+		metadataEntries = append(metadataEntries, &pb.MetadataEntry{
+			Key:   key,
+			Value: value,
+		})
+	}
+
+	return connect.NewResponse(&pb.GetAllMetadataResponse{
+		Metadata: metadataEntries,
+	}), nil
+}
+
 // P2PServer implements the P2PService defined in the proto file
 type P2PServer struct {
 	// Add dependencies needed for P2P functionality

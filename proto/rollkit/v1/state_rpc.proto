@@ -17,6 +17,12 @@ service StoreService {
 
   // GetMetadata returns metadata for a specific key
   rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse) {}
+
+  // ListMetadataKeys returns all available metadata keys with descriptions
+  rpc ListMetadataKeys(google.protobuf.Empty) returns (ListMetadataKeysResponse) {}
+
+  // GetAllMetadata returns all node metadata at once
+  rpc GetAllMetadata(google.protobuf.Empty) returns (GetAllMetadataResponse) {}
 }
 
 // Block contains all the components of a complete block
@@ -52,4 +58,26 @@ message GetMetadataRequest {
 // GetMetadataResponse defines the response for retrieving metadata
 message GetMetadataResponse {
   bytes value = 1;
+}
+
+// MetadataKey describes a metadata key with its description
+message MetadataKey {
+  string key = 1;
+  string description = 2;
+}
+
+// ListMetadataKeysResponse defines the response for listing metadata keys
+message ListMetadataKeysResponse {
+  repeated MetadataKey keys = 1;
+}
+
+// MetadataEntry represents a key-value pair of metadata
+message MetadataEntry {
+  string key = 1;
+  bytes value = 2;
+}
+
+// GetAllMetadataResponse defines the response for retrieving all metadata
+message GetAllMetadataResponse {
+  repeated MetadataEntry metadata = 1;
 }

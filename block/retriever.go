@@ -141,13 +141,23 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 
 	var err error
 	m.logger.Debug("trying to retrieve data from DA", "daHeight", daHeight)
+
+	// Add a maximum time limit for the entire process to prevent infinite hanging
+	processCtx, processCancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer processCancel()
+
 	for r := 0; r < dAFetcherRetries; r++ {
 		select {
+		case <-processCtx.Done():
+			m.logger.Warn("DA fetch process timed out", "daHeight", daHeight, "totalRetries", r)
+			return fmt.Errorf("DA fetch process timed out after %d retries", r)
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		blobsResp, fetchErr := m.fetchBlobs(ctx, daHeight)
+
+		m.logger.Debug("attempting DA fetch", "daHeight", daHeight, "retry", r+1, "maxRetries", dAFetcherRetries)
+		blobsResp, fetchErr := m.fetchBlobs(processCtx, daHeight)
 
 		// Check for successful retrieval first
 		if fetchErr == nil && blobsResp.Code == coreda.StatusSuccess {
@@ -194,21 +204,42 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 			}
 		}
 
-		// Check if this is a timeout/deadline error that might be recoverable
-		isTimeoutError := strings.Contains(fetchErr.Error(), "context deadline exceeded") ||
-			strings.Contains(fetchErr.Error(), "timeout") ||
-			strings.Contains(fetchErr.Error(), coreda.ErrContextDeadline.Error())
+		// If we have any error (including timeout), track it
+		if fetchErr != nil {
+			// Check if this is a timeout/deadline error that might be recoverable
+			isTimeoutError := strings.Contains(fetchErr.Error(), "context deadline exceeded") ||
+				strings.Contains(fetchErr.Error(), "timeout") ||
+				strings.Contains(fetchErr.Error(), coreda.ErrContextDeadline.Error())
 
-		if isTimeoutError {
-			m.logger.Debug("timeout error during DA fetch",
+			if isTimeoutError {
+				m.logger.Debug("timeout error during DA fetch",
+					"daHeight", daHeight,
+					"retry", r+1,
+					"maxRetries", dAFetcherRetries,
+					"error", fetchErr.Error())
+			} else {
+				m.logger.Debug("error during DA fetch",
+					"daHeight", daHeight,
+					"retry", r+1,
+					"maxRetries", dAFetcherRetries,
+					"error", fetchErr.Error())
+			}
+
+			// Track the error
+			err = errors.Join(err, fetchErr)
+		} else {
+			// If no error but also not success, something is wrong
+			m.logger.Debug("unexpected DA fetch result",
 				"daHeight", daHeight,
 				"retry", r+1,
 				"maxRetries", dAFetcherRetries,
-				"error", fetchErr.Error())
-		}
+				"code", blobsResp.Code,
+				"message", blobsResp.Message)
 
-		// Track the error
-		err = errors.Join(err, fetchErr)
+			// Create an error for unexpected states
+			fetchErr = fmt.Errorf("unexpected DA fetch result: code=%d, message=%s", blobsResp.Code, blobsResp.Message)
+			err = errors.Join(err, fetchErr)
+		}
 
 		// Apply progressive backoff for retries within the same height
 		retryBackoffBase := m.config.DA.RetryBackoffBase

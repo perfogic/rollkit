@@ -170,6 +170,18 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 			return fetchErr
 		}
 
+		// Handle context cancellation
+		if blobsResp.Code == coreda.StatusContextCanceled {
+			m.logger.Debug("DA fetch cancelled", "daHeight", daHeight, "reason", blobsResp.Message)
+			return ctx.Err()
+		}
+
+		// Handle timeout/deadline specifically
+		if blobsResp.Code == coreda.StatusContextDeadline {
+			m.logger.Debug("DA fetch timeout", "daHeight", daHeight, "reason", blobsResp.Message)
+			// Don't return immediately, let the retry logic handle it
+		}
+
 		// Check if this is a timeout/deadline error that might be recoverable
 		isTimeoutError := strings.Contains(fetchErr.Error(), "context deadline exceeded") ||
 			strings.Contains(fetchErr.Error(), "timeout") ||

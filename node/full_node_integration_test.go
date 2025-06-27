@@ -1,3 +1,5 @@
+//go:build integration
+
 package node
 
 import (
@@ -479,3 +481,5 @@ func testTwoChainsInOneNamespace(t *testing.T, chainID1 string, chainID2 string)
 	shutdownAndWait(t, cancels1, &runningWg1, 5*time.Second)
 	shutdownAndWait(t, cancels2, &runningWg2, 5*time.Second)
 }
+
+

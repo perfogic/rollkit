@@ -88,6 +88,9 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 				m.handlePotentialData(ctx, bz, daHeight)
 			}
 			return nil
+		} else if strings.Contains(fetchErr.Error(), coreda.ErrHeightFromFuture.Error()) {
+			m.logger.Debug("height from future", "daHeight", daHeight, "reason", fetchErr.Error())
+			return fetchErr
 		}
 
 		// Track the error
@@ -130,7 +133,7 @@ func (m *Manager) handlePotentialHeader(ctx context.Context, bz []byte, daHeight
 		return true
 	}
 	headerHash := header.Hash().String()
-	m.headerCache.SetDAIncluded(headerHash)
+	m.headerCache.SetDAIncluded(headerHash, daHeight)
 	m.sendNonBlockingSignalToDAIncluderCh()
 	m.logger.Info("header marked as DA included", "headerHeight", header.Height(), "headerHash", headerHash)
 	if !m.headerCache.IsSeen(headerHash) {
@@ -165,9 +168,9 @@ func (m *Manager) handlePotentialData(ctx context.Context, bz []byte, daHeight u
 	}
 
 	dataHashStr := signedData.Data.DACommitment().String()
-	m.dataCache.SetDAIncluded(dataHashStr)
+	m.dataCache.SetDAIncluded(dataHashStr, daHeight)
 	m.sendNonBlockingSignalToDAIncluderCh()
-	m.logger.Info("signed data marked as DA included", "dataHash", dataHashStr, "daHeight", daHeight)
+	m.logger.Info("signed data marked as DA included", "dataHash", dataHashStr, "daHeight", daHeight, "height", signedData.Height())
 	if !m.dataCache.IsSeen(dataHashStr) {
 		select {
 		case <-ctx.Done():
@@ -209,9 +212,13 @@ func (m *Manager) fetchBlobs(ctx context.Context, daHeight uint64) (coreda.Resul
 	ctx, cancel := context.WithTimeout(ctx, dAefetcherTimeout)
 	defer cancel()
 	// TODO: we should maintain the original error instead of creating a new one as we lose context by creating a new error.
-	blobsRes := types.RetrieveWithHelpers(ctx, m.da, m.logger, daHeight)
-	if blobsRes.Code == coreda.StatusError {
+	blobsRes := types.RetrieveWithHelpers(ctx, m.da, m.logger, daHeight, []byte(m.genesis.ChainID))
+	switch blobsRes.Code {
+	case coreda.StatusError:
 		err = fmt.Errorf("failed to retrieve block: %s", blobsRes.Message)
+	case coreda.StatusHeightFromFuture:
+		// Keep the root cause intact for callers that may rely on errors.Is/As.
+		err = fmt.Errorf("%w: %s", coreda.ErrHeightFromFuture, blobsRes.Message)
 	}
 	return blobsRes, err
 }

@@ -124,7 +124,6 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 		case blobsFoundCh <- struct{}{}:
 		default:
 		}
-		m.daHeight.Store(daHeight + 1)
 	}
 }
 
@@ -163,23 +162,33 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 		// Check for successful retrieval first
 		if fetchErr == nil && blobsResp.Code == coreda.StatusSuccess {
 			m.logger.Info("successfully retrieved blob data", "n", len(blobsResp.Data), "daHeight", daHeight, "retry", r+1)
+			blocksProcessed := 0
 			for _, bz := range blobsResp.Data {
 				if len(bz) == 0 {
 					m.logger.Debug("ignoring nil or empty blob", "daHeight", daHeight)
 					continue
 				}
 				if m.handlePotentialHeader(ctx, bz, daHeight) {
+					blocksProcessed++
 					continue
 				}
-				m.handlePotentialData(ctx, bz, daHeight)
+				if m.handlePotentialData(ctx, bz, daHeight) {
+					blocksProcessed++
+				}
 			}
-			m.logger.Info("completed processing blob data", "daHeight", daHeight)
+			m.logger.Info("completed processing blob data", "daHeight", daHeight, "blocksProcessed", blocksProcessed)
+
+			// Always move to next DA height after processing all blobs at current height
+			// This prevents requesting the same DA height multiple times
+			m.daHeight.Store(daHeight + 1)
 			return nil
 		}
 
 		// Check for not found (this is also success, just no data)
 		if blobsResp.Code == coreda.StatusNotFound {
 			m.logger.Debug("no blob data found", "daHeight", daHeight, "reason", blobsResp.Message)
+			// No data found, move to next DA height
+			m.daHeight.Store(daHeight + 1)
 			return nil
 		}
 
@@ -312,23 +321,23 @@ func (m *Manager) handlePotentialHeader(ctx context.Context, bz []byte, daHeight
 	return true
 }
 
-// handlePotentialData tries to decode and process a data. No return value.
-func (m *Manager) handlePotentialData(ctx context.Context, bz []byte, daHeight uint64) {
+// handlePotentialData tries to decode and process a data. Returns true if data was processed.
+func (m *Manager) handlePotentialData(ctx context.Context, bz []byte, daHeight uint64) bool {
 	var signedData types.SignedData
 	err := signedData.UnmarshalBinary(bz)
 	if err != nil {
 		m.logger.Debug("failed to unmarshal signed data", "error", err)
-		return
+		return false
 	}
 	if len(signedData.Txs) == 0 {
 		m.logger.Debug("ignoring empty signed data", "daHeight", daHeight)
-		return
+		return false
 	}
 
 	// Early validation to reject junk data
 	if !m.isValidSignedData(&signedData) {
 		m.logger.Debug("invalid data signature", "daHeight", daHeight)
-		return
+		return false
 	}
 
 	dataHashStr := signedData.Data.DACommitment().String()
@@ -338,12 +347,13 @@ func (m *Manager) handlePotentialData(ctx context.Context, bz []byte, daHeight u
 	if !m.dataCache.IsSeen(dataHashStr) {
 		select {
 		case <-ctx.Done():
-			return
+			return true
 		default:
 			m.logger.Warn("dataInCh backlog full, dropping signed data", "daHeight", daHeight)
 		}
 		m.dataInCh <- NewDataEvent{&signedData.Data, daHeight}
 	}
+	return true
 }
 
 // areAllErrorsHeightFromFuture checks if all errors in a joined error are ErrHeightFromFutureStr

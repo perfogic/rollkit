@@ -50,6 +50,7 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 	// Track consecutive failures for the current DA height
 	var consecutiveFailures int
 	var lastFailedHeight uint64
+	var lastProcessedHeight uint64
 
 	for {
 		select {
@@ -59,6 +60,19 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 		case <-blobsFoundCh:
 		}
 		daHeight := m.daHeight.Load()
+
+		// Skip if we've already processed this DA height
+		if daHeight <= lastProcessedHeight {
+			m.logger.Debug("skipping already processed DA height", "daHeight", daHeight, "lastProcessed", lastProcessedHeight)
+			// Add a small delay to prevent busy waiting
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+
 		err := m.processNextDAHeaderAndData(ctx)
 
 		if err != nil && ctx.Err() == nil {
@@ -118,8 +132,10 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 		// Success - reset failure tracking
 		consecutiveFailures = 0
 		lastFailedHeight = 0
+		lastProcessedHeight = daHeight
 
-		// Signal the blobsFoundCh to try and retrieve the next set of blobs
+		// Only signal to continue if we're not at the latest DA height
+		// This prevents unnecessary polling when we've caught up
 		select {
 		case blobsFoundCh <- struct{}{}:
 		default:

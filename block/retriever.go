@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	dAefetcherTimeout = 30 * time.Second
+	dAefetcherTimeout = 2 * time.Minute // Increased from 30s to 2 minutes for large blob retrieval
 	dAFetcherRetries  = 10
 	// Default values for retry behavior
 	defaultMaxConsecutiveFailures = 5
@@ -143,7 +143,8 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 	m.logger.Debug("trying to retrieve data from DA", "daHeight", daHeight)
 
 	// Add a maximum time limit for the entire process to prevent infinite hanging
-	processCtx, processCancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Use a longer timeout since we can see data is being retrieved successfully
+	processCtx, processCancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer processCancel()
 
 	for r := 0; r < dAFetcherRetries; r++ {
@@ -161,7 +162,7 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 
 		// Check for successful retrieval first
 		if fetchErr == nil && blobsResp.Code == coreda.StatusSuccess {
-			m.logger.Debug("retrieved potential blob data", "n", len(blobsResp.Data), "daHeight", daHeight)
+			m.logger.Info("successfully retrieved blob data", "n", len(blobsResp.Data), "daHeight", daHeight, "retry", r+1)
 			for _, bz := range blobsResp.Data {
 				if len(bz) == 0 {
 					m.logger.Debug("ignoring nil or empty blob", "daHeight", daHeight)
@@ -172,6 +173,7 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 				}
 				m.handlePotentialData(ctx, bz, daHeight)
 			}
+			m.logger.Info("completed processing blob data", "daHeight", daHeight)
 			return nil
 		}
 

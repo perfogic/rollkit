@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -401,6 +403,25 @@ func (m *Manager) fetchBlobs(ctx context.Context, daHeight uint64) (coreda.Resul
 	var err error
 	ctx, cancel := context.WithTimeout(ctx, dAefetcherTimeout)
 	defer cancel()
+
+	// Check if this DA height is already being fetched
+	fetchKey := fmt.Sprintf("fetch_%d", daHeight)
+	if _, loaded := m.ongoingFetches.LoadOrStore(fetchKey, true); loaded {
+		m.logger.Debug("DA height already being fetched by another goroutine, skipping", "daHeight", daHeight)
+		// Return a "not found" result to indicate this request should be skipped
+		return coreda.ResultRetrieve{
+			BaseResult: coreda.BaseResult{
+				Code:    coreda.StatusNotFound,
+				Message: "fetch already in progress",
+				Height:  daHeight,
+			},
+		}, nil
+	}
+
+	// Ensure we clean up the fetch tracking when done
+	defer func() {
+		m.ongoingFetches.Delete(fetchKey)
+	}()
 
 	m.logger.Debug("fetching blobs from DA",
 		"daHeight", daHeight,

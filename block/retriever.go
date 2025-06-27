@@ -17,6 +17,10 @@ import (
 const (
 	dAefetcherTimeout = 30 * time.Second
 	dAFetcherRetries  = 10
+	// Default values for retry behavior
+	defaultMaxConsecutiveFailures = 5
+	defaultRetryBackoffBase       = 100 * time.Millisecond
+	defaultMaxRetryBackoff        = 10 * time.Second
 )
 
 // RetrieveLoop is responsible for interacting with DA layer.
@@ -26,6 +30,27 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 	// This enables syncing faster than the DA block time.
 	blobsFoundCh := make(chan struct{}, 1)
 	defer close(blobsFoundCh)
+
+	// Get configuration values with defaults
+	maxConsecutiveFailures := m.config.DA.MaxConsecutiveFailures
+	if maxConsecutiveFailures <= 0 {
+		maxConsecutiveFailures = defaultMaxConsecutiveFailures
+	}
+
+	retryBackoffBase := m.config.DA.RetryBackoffBase
+	if retryBackoffBase <= 0 {
+		retryBackoffBase = defaultRetryBackoffBase
+	}
+
+	maxRetryBackoff := m.config.DA.MaxRetryBackoff
+	if maxRetryBackoff <= 0 {
+		maxRetryBackoff = defaultMaxRetryBackoff
+	}
+
+	// Track consecutive failures for the current DA height
+	var consecutiveFailures int
+	var lastFailedHeight uint64
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -35,13 +60,65 @@ func (m *Manager) RetrieveLoop(ctx context.Context) {
 		}
 		daHeight := m.daHeight.Load()
 		err := m.processNextDAHeaderAndData(ctx)
+
 		if err != nil && ctx.Err() == nil {
+			// Check if this is the same height that failed before
+			if daHeight == lastFailedHeight {
+				consecutiveFailures++
+			} else {
+				// Reset counter for new height
+				consecutiveFailures = 1
+				lastFailedHeight = daHeight
+			}
+
 			// if the requested da height is not yet available, wait silently, otherwise log the error and wait
 			if !m.areAllErrorsHeightFromFuture(err) {
-				m.logger.Error("failed to retrieve data from DALC", "daHeight", daHeight, "errors", err.Error())
+				m.logger.Error("failed to retrieve data from DALC",
+					"daHeight", daHeight,
+					"errors", err.Error(),
+					"consecutiveFailures", consecutiveFailures,
+					"maxConsecutiveFailures", maxConsecutiveFailures)
+			}
+
+			// If we've failed too many times on the same height, skip it to prevent infinite loops
+			if consecutiveFailures >= maxConsecutiveFailures {
+				m.logger.Warn("skipping DA height after consecutive failures",
+					"daHeight", daHeight,
+					"consecutiveFailures", consecutiveFailures,
+					"maxConsecutiveFailures", maxConsecutiveFailures,
+					"error", err.Error())
+
+				// Reset failure tracking and move to next height
+				consecutiveFailures = 0
+				lastFailedHeight = 0
+				m.daHeight.Store(daHeight + 1)
+
+				// Add a brief delay before continuing to avoid rapid cycling
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(retryBackoffBase):
+				}
+			} else {
+				// Apply exponential backoff for retries
+				backoffDuration := time.Duration(consecutiveFailures) * retryBackoffBase
+				if backoffDuration > maxRetryBackoff {
+					backoffDuration = maxRetryBackoff
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoffDuration):
+				}
 			}
 			continue
 		}
+
+		// Success - reset failure tracking
+		consecutiveFailures = 0
+		lastFailedHeight = 0
+
 		// Signal the blobsFoundCh to try and retrieve the next set of blobs
 		select {
 		case blobsFoundCh <- struct{}{}:
@@ -93,13 +170,43 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 			return fetchErr
 		}
 
+		// Check if this is a timeout/deadline error that might be recoverable
+		isTimeoutError := strings.Contains(fetchErr.Error(), "context deadline exceeded") ||
+			strings.Contains(fetchErr.Error(), "timeout") ||
+			strings.Contains(fetchErr.Error(), coreda.ErrContextDeadline.Error())
+
+		if isTimeoutError {
+			m.logger.Debug("timeout error during DA fetch",
+				"daHeight", daHeight,
+				"retry", r+1,
+				"maxRetries", dAFetcherRetries,
+				"error", fetchErr.Error())
+		}
+
 		// Track the error
 		err = errors.Join(err, fetchErr)
+
+		// Apply progressive backoff for retries within the same height
+		retryBackoffBase := m.config.DA.RetryBackoffBase
+		if retryBackoffBase <= 0 {
+			retryBackoffBase = defaultRetryBackoffBase
+		}
+
+		maxRetryBackoff := m.config.DA.MaxRetryBackoff
+		if maxRetryBackoff <= 0 {
+			maxRetryBackoff = defaultMaxRetryBackoff
+		}
+
+		retryBackoff := time.Duration(r+1) * retryBackoffBase
+		if retryBackoff > maxRetryBackoff {
+			retryBackoff = maxRetryBackoff
+		}
+
 		// Delay before retrying
 		select {
 		case <-ctx.Done():
 			return err
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(retryBackoff):
 		}
 	}
 	return err
@@ -211,14 +318,33 @@ func (m *Manager) fetchBlobs(ctx context.Context, daHeight uint64) (coreda.Resul
 	var err error
 	ctx, cancel := context.WithTimeout(ctx, dAefetcherTimeout)
 	defer cancel()
+
+	m.logger.Debug("fetching blobs from DA",
+		"daHeight", daHeight,
+		"namespace", string([]byte(m.genesis.ChainID)),
+		"timeout", dAefetcherTimeout)
+
 	// TODO: we should maintain the original error instead of creating a new one as we lose context by creating a new error.
 	blobsRes := types.RetrieveWithHelpers(ctx, m.da, m.logger, daHeight, []byte(m.genesis.ChainID))
 	switch blobsRes.Code {
 	case coreda.StatusError:
 		err = fmt.Errorf("failed to retrieve block: %s", blobsRes.Message)
+		m.logger.Debug("DA fetch failed with error status",
+			"daHeight", daHeight,
+			"message", blobsRes.Message)
 	case coreda.StatusHeightFromFuture:
 		// Keep the root cause intact for callers that may rely on errors.Is/As.
 		err = fmt.Errorf("%w: %s", coreda.ErrHeightFromFuture, blobsRes.Message)
+		m.logger.Debug("DA fetch failed - height from future",
+			"daHeight", daHeight,
+			"message", blobsRes.Message)
+	case coreda.StatusSuccess:
+		m.logger.Debug("DA fetch successful",
+			"daHeight", daHeight,
+			"numBlobs", len(blobsRes.Data))
+	case coreda.StatusNotFound:
+		m.logger.Debug("DA fetch - no blobs found",
+			"daHeight", daHeight)
 	}
 	return blobsRes, err
 }

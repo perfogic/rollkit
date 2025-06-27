@@ -148,11 +148,9 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 		default:
 		}
 		blobsResp, fetchErr := m.fetchBlobs(ctx, daHeight)
-		if fetchErr == nil {
-			if blobsResp.Code == coreda.StatusNotFound {
-				m.logger.Debug("no blob data found", "daHeight", daHeight, "reason", blobsResp.Message)
-				return nil
-			}
+
+		// Check for successful retrieval first
+		if fetchErr == nil && blobsResp.Code == coreda.StatusSuccess {
 			m.logger.Debug("retrieved potential blob data", "n", len(blobsResp.Data), "daHeight", daHeight)
 			for _, bz := range blobsResp.Data {
 				if len(bz) == 0 {
@@ -165,7 +163,16 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 				m.handlePotentialData(ctx, bz, daHeight)
 			}
 			return nil
-		} else if strings.Contains(fetchErr.Error(), coreda.ErrHeightFromFuture.Error()) {
+		}
+
+		// Check for not found (this is also success, just no data)
+		if blobsResp.Code == coreda.StatusNotFound {
+			m.logger.Debug("no blob data found", "daHeight", daHeight, "reason", blobsResp.Message)
+			return nil
+		}
+
+		// Handle height from future
+		if fetchErr != nil && strings.Contains(fetchErr.Error(), coreda.ErrHeightFromFuture.Error()) {
 			m.logger.Debug("height from future", "daHeight", daHeight, "reason", fetchErr.Error())
 			return fetchErr
 		}
@@ -176,10 +183,15 @@ func (m *Manager) processNextDAHeaderAndData(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		// Handle timeout/deadline specifically
-		if blobsResp.Code == coreda.StatusContextDeadline {
-			m.logger.Debug("DA fetch timeout", "daHeight", daHeight, "reason", blobsResp.Message)
-			// Don't return immediately, let the retry logic handle it
+		// Handle timeout/deadline specifically - this should be treated as an error for retry logic
+		if blobsResp.Code == coreda.StatusContextDeadline ||
+		   (fetchErr != nil && (strings.Contains(fetchErr.Error(), "context deadline exceeded") ||
+		                       strings.Contains(fetchErr.Error(), "timeout"))) {
+			m.logger.Debug("DA fetch timeout", "daHeight", daHeight, "reason", blobsResp.Message, "error", fetchErr)
+			// Ensure we have an error to return for the retry logic
+			if fetchErr == nil {
+				fetchErr = fmt.Errorf("context deadline exceeded: %s", blobsResp.Message)
+			}
 		}
 
 		// Check if this is a timeout/deadline error that might be recoverable
@@ -348,6 +360,18 @@ func (m *Manager) fetchBlobs(ctx context.Context, daHeight uint64) (coreda.Resul
 		// Keep the root cause intact for callers that may rely on errors.Is/As.
 		err = fmt.Errorf("%w: %s", coreda.ErrHeightFromFuture, blobsRes.Message)
 		m.logger.Debug("DA fetch failed - height from future",
+			"daHeight", daHeight,
+			"message", blobsRes.Message)
+	case coreda.StatusContextDeadline:
+		// Create an error for timeout/deadline cases
+		err = fmt.Errorf("context deadline exceeded: %s", blobsRes.Message)
+		m.logger.Debug("DA fetch failed - timeout",
+			"daHeight", daHeight,
+			"message", blobsRes.Message)
+	case coreda.StatusContextCanceled:
+		// Create an error for cancellation cases
+		err = fmt.Errorf("context canceled: %s", blobsRes.Message)
+		m.logger.Debug("DA fetch failed - canceled",
 			"daHeight", daHeight,
 			"message", blobsRes.Message)
 	case coreda.StatusSuccess:
